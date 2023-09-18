@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="utf-8">
+        <title>Dreame Adapter Map</title>
+        <link rel="stylesheet" href="/assets/leaflet/leaflet.css" />
+        <script src="/assets/leaflet/leaflet.js"></script>
+    </head>
+    <body>
+        <style>
+            head, body {
+                padding: 0;
+                margin: 0;
+            }
+            #header {
+                height: 0.7cm;
+                padding: 0.15cm;
+                color: #0076ff;
+                font-size: 0.5cm;
+                line-height: 0.7cm;
+            }
+            #header > img {
+                height: 0.7cm;
+                padding-right: 2em;
+                vertical-align: top;
+            }
+            #map {
+                display: block;
+                height: calc(100vh - 1cm);
+            }
+            #oopsErrorMessage {
+                display: none;
+                height: calc(100vh - 1cm);
+                background-color: #ff7a7a;
+            }
+            .oopsError #map {
+                display: none;
+            }
+            .oopsError #oopsErrorMessage {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .pcbPopup {
+                font-size: 1cm;
+                line-height:1.2cm;
+                text-align: center;
+            }
+            .pcbPopup img {
+                vertical-align: top;
+                width: 1.2cm;
+                height: 1.2cm;
+                padding-right: 0.3cm;
+            }
+            .pcbPopup p.pcbPopupAdditionalInformation {
+                margin: 0;
+                padding: 0;
+                margin-top: 0.25cm;
+                font-size: 0.7cm;
+                line-height: 0.8cm;
+                color: #9a9a9a;
+            }
+        </style>
+        <div id="header">
+            <img src="/assets/valetudo.svg" alt="Valetudo"> Dreame PCB adapter
+        </div>
+        <div id="map"></div>
+        <div id="oopsErrorMessage">Sorry, something went wrong. You know the drill – please check your internet connection and try again. If the problem persists, consider opening an issue on GitHub.</div>
+        <script>
+            "use strict";
+            (async () => {
+                function createPopupForPcb(pcb) {
+                    const username = pcb.username;
+                    if (!username.match(/^[a-zA-Z0-9_]+$/)) {
+                        throw new Error("Invalid username");
+                    }
+                    let mainDiv = document.createElement("div");
+                    mainDiv.classList.add("pcbPopup");
+                    
+                    let link = document.createElement("a");
+                    link.href = "https://t.me/" + username;
+                    link.rel = "noopener noreferer";
+                    link.target = "blank";
+
+                    let icon = document.createElement("img");
+                    icon.src = "/assets/telegram_logo.svg";
+                    icon.alt = "Telegram";
+
+                    let name = document.createTextNode("@" + username);
+
+                    link.appendChild(icon);
+                    link.appendChild(name);
+                    mainDiv.appendChild(link);
+
+                    if (pcb.additionalInformation) {
+                        let additionalInformation = document.createElement("p");
+                        additionalInformation.classList.add("pcbPopupAdditionalInformation");
+                        additionalInformation.textContent = pcb.additionalInformation;
+                        mainDiv.appendChild(additionalInformation);
+                    }
+
+                    return mainDiv;
+                }
+
+                try {
+
+                    let youAreHereMarker;
+
+                    var map = L.map('map').setView([50.7, 10.1], 6);
+
+                    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors | Get your adapter added to the list | GitHub'
+                    }).addTo(map);
+
+                    let httpResponse = await fetch("/pcbs.json");
+                    if (!httpResponse.ok) {
+                        throw new Error("Failed fetching pcbs.json: HTTP " + httpResponse.status);
+                    }
+                    let pcbs = await httpResponse.json();
+                    for (const pcb of pcbs) {
+                        console.trace(pcb);
+                        L.marker(pcb.location, {
+                            icon: L.icon({
+                                iconUrl: "/assets/pcb_image.png",
+                                iconSize: [70, 34],
+                                iconAnchor: [35, 17],
+                                popupAnchor: [0, -13]
+                            })
+                        }).bindPopup(createPopupForPcb(pcb)).addTo(map);
+                    }
+
+                    map.locate({
+                        setView: true,
+                        maxZoom: 8
+                    });
+
+                    map.addEventListener("locationfound", (event) => {
+                        if (youAreHereMarker) {
+                            youAreHereMarker.remove();
+                        }
+                        youAreHereMarker = L.marker([event.latitude, event.longitude]).bindPopup("Your location");
+                        youAreHereMarker.addTo(map);
+                    });
+                } catch (e) {
+                    console.error("Uncatched error", e);
+                    document.body.classList.add("oopsError");
+                }
+            })();
+        </script>
+    </body>
+</html>
