@@ -7,6 +7,8 @@ edition = "2021"
 
 [dependencies]
 axum = { version = "0.6.20", features = ["json"] }
+frankenstein = { version = "0.27.0", default-features = false, features = ["async-http-client"] }
+futures = "0.3.28"
 serde = { version = "1.0.188", features = ["derive"] }
 tokio = { version = "1.32.0", features = ["full"] }
 tower-http = { version = "0.4.4", features = ["fs"] }

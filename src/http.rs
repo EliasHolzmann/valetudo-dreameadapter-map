@@ -1,6 +1,7 @@
-use axum::{routing::get, Router, Json};
-use serde::Serialize;
+use axum::{routing::get, Json, Router};
 use tower_http::services::ServeDir;
+
+use super::Pcb;
 
 pub async fn start_http_server() {
     // build our application with a single route
@@ -15,25 +16,17 @@ pub async fn start_http_server() {
         .unwrap();
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Pcb {
-    username: String,
-    location: (f64, f64),
-    additional_information: Option<String>
-}
-
 async fn get_pcbs() -> Json<Vec<Pcb>> {
     Json(vec![
         Pcb {
             username: String::from("bartim"),
             location: (51.5, -0.09),
-            additional_information: None
+            additional_information: None,
         },
         Pcb {
             username: String::from("bartim"),
             location: (55.5, -0.09),
-            additional_information: Some(String::from("Currently out of country"))
+            additional_information: Some(String::from("Currently out of country")),
         },
     ])
 }
