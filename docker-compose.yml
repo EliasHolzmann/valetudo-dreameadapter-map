@@ -20,7 +20,9 @@ services:
       - 8080:8080
 
   valetudomap:
-    build: .
+    build: 
+      context: .
+      network: host
     ports:
       - 8081:3000
     environment:

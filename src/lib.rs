@@ -7,7 +7,7 @@ pub use http::start_http_server;
 mod bot;
 pub use bot::start_telegram_bot;
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct Pcb {
     user_id: u64,

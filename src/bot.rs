@@ -1,5 +1,8 @@
 use std::{
-    collections::{hash_map::{Entry, OccupiedEntry}, HashMap},
+    collections::{
+        hash_map::{Entry, OccupiedEntry},
+        HashMap,
+    },
     time,
 };
 
@@ -8,7 +11,7 @@ use frankenstein::{
     ReplyKeyboardMarkup, ReplyKeyboardRemove, ReplyMarkup, SendMessageParams, UpdateContent, User,
 };
 
-use crate::{Pcb, Database};
+use crate::{Database, Pcb};
 
 macro_rules! send_message {
     ($api:expr, $chat:expr, $reply_keyboard_markup:expr, $($arg:tt)*) => {
@@ -45,7 +48,15 @@ pub async fn send_message(
     }
 }
 
-async fn received_pcb_data(api: &AsyncApi, chat_id: i64, user: &User, entry: OccupiedEntry<'_, u64, (time::Instant, UserDialogueState)>, location: (f64, f64), additional_information: Option<String>) {
+async fn received_pcb_data(
+    database: &Database,
+    api: &AsyncApi,
+    chat_id: i64,
+    user: &User,
+    entry: OccupiedEntry<'_, u64, (time::Instant, UserDialogueState)>,
+    location: (f64, f64),
+    additional_information: Option<String>,
+) {
     if let Some(username) = user.username.clone() {
         let pcb = Pcb {
             user_id: user.id,
@@ -53,12 +64,16 @@ async fn received_pcb_data(api: &AsyncApi, chat_id: i64, user: &User, entry: Occ
             location,
             additional_information,
         };
-        //TODO
-        send_message!(api, chat_id, None, "Great\\! We are done here\\. To edit your entry on the map, send me /start again\\.");
+        match database.insert_entry(&pcb).await {
+            Ok(()) => send_message!(api, chat_id, None, "Great\\! We are done here\\. To edit your entry on the map, send me /start again\\."),
+            Err(error) => {
+                eprintln!("Inserting {pcb:?} for user {user:?} went wrong: {error}/{error:?}");
+                send_message!(api, chat_id, None, "Sorry, that didn't work\\. Please send me the command /start to try again\\. If the problem persists, please open an issue on GitHub\\.");
+            }
+        }
         entry.remove();
     } else {
         send_message!(api, chat_id, None, "I'm sorry, you seem to have removed your username during our conversation\\. To allow users to contact you via the map, a Telegram username is necessary\\. Please set a username in the Telegram settings\\. When you are done, you can send me the command /start to restart our conversation\\.");
-
     }
 }
 
@@ -78,12 +93,21 @@ pub fn markdown_escape(string: String) -> String {
 }
 
 fn vertical_keyboard_layout(buttons: &[&'static str]) -> ReplyKeyboardMarkup {
-    ReplyKeyboardMarkup::builder().keyboard(buttons.into_iter().map(|button| vec![KeyboardButton::builder().text(button.to_string()).build()]).collect()).resize_keyboard(true).one_time_keyboard(true).build()
+    ReplyKeyboardMarkup::builder()
+        .keyboard(
+            buttons
+                .into_iter()
+                .map(|button| vec![KeyboardButton::builder().text(button.to_string()).build()])
+                .collect(),
+        )
+        .resize_keyboard(true)
+        .one_time_keyboard(true)
+        .build()
 }
 
-pub async fn start_telegram_bot(_: Database) {
+pub async fn start_telegram_bot(database: Database) {
     let mut user_states: HashMap<u64, (time::Instant, UserDialogueState)> = HashMap::new();
-    
+
     let token = std::env::var("TELEGRAM_BOT_TOKEN").expect("TELEGRAM_BOT_TOKEN not set");
 
     let api = AsyncApi::new(&token);
@@ -115,12 +139,12 @@ pub async fn start_telegram_bot(_: Database) {
                                             send_message!(&api, message.chat.id, None, "Alright, then you may now enter this additional information\\. Please don't enter too much, I will truncate your input at 250 characters\\.");
                                             *user_state.get_mut() = (time::Instant::now(), UserDialogueState::WaitForAdditionalInformation(coords));
                                         },
-                                        Some("No") => received_pcb_data(&api, message.chat.id, &user, user_state, coords, None).await,
+                                        Some("No") => received_pcb_data(&database, &api, message.chat.id, &user, user_state, coords, None).await,
                                         _ => send_message!(&api, message.chat.id, Some(vertical_keyboard_layout(&["Yes", "No"])), "Sorry, I don't understand. Please reply either \"Yes\" or \"No\"\\.")
 
                                     },
                                     UserDialogueState::WaitForAdditionalInformation(coords) => if let Some(text) = message.text {
-                                        received_pcb_data(&api, message.chat.id, &user, user_state, coords, Some(text)).await;
+                                        received_pcb_data(&database, &api, message.chat.id, &user, user_state, coords, Some(text)).await;
                                     } else {
                                         send_message!(&api, message.chat.id, None, "Sorry, this additional information must be text.");
                                     }
