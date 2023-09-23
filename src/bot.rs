@@ -3,13 +3,14 @@ use std::{
         hash_map::{Entry, OccupiedEntry},
         HashMap,
     },
-    time,
+    time::{self, Duration}, sync::Arc,
 };
 
 use frankenstein::{
     AllowedUpdate, AsyncApi, AsyncTelegramApi, GetUpdatesParams, KeyboardButton, ParseMode,
     ReplyKeyboardMarkup, ReplyKeyboardRemove, ReplyMarkup, SendMessageParams, UpdateContent, User,
 };
+use tokio::sync::Mutex;
 
 use crate::{Database, Pcb};
 
@@ -48,12 +49,39 @@ pub async fn send_message(
     }
 }
 
+async fn clean_up_stale_user_states(api: Arc<Mutex<AsyncApi>>, user_states: Arc<Mutex<HashMap<u64, (time::Instant, (i64, UserDialogueState))>>>) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(300)).await;
+
+        let api = api.lock().await;
+        let mut user_states = user_states.lock().await;
+        let session_length = if user_states.len() > 10_000 {
+            eprintln!("{} concurrent chatbot sessions ongoing – possible DDoS detected! Setting session timeout to 15 minutes", user_states.len());
+            900
+        } else {
+            14400
+        };
+
+        //TODO use HashMap::retain instead?
+        let mut to_remove = vec![];
+        for (user_id, (last_accessed, _)) in user_states.iter() {
+            if last_accessed.elapsed() > std::time::Duration::from_secs(session_length) {
+                to_remove.push(*user_id);
+            }
+        }
+        for to_remove in to_remove {
+            let old_state = user_states.remove(&to_remove).expect("State was gone when I tried to remove it, but it was there before");
+            send_message!(&api, old_state.1.0, None, "Sorry, you took too long, I had to cancel our session\\. If you still want to add yourself to the map, send me /start again\\.");
+        }
+    }
+}
+
 async fn received_pcb_data(
     database: &Database,
     api: &AsyncApi,
     chat_id: i64,
     user: &User,
-    entry: OccupiedEntry<'_, u64, (time::Instant, UserDialogueState)>,
+    entry: OccupiedEntry<'_, u64, (time::Instant, (i64, UserDialogueState))>,
     location: (f64, f64),
     additional_information: Option<String>,
 ) {
@@ -106,15 +134,17 @@ fn vertical_keyboard_layout(buttons: &[&'static str]) -> ReplyKeyboardMarkup {
 }
 
 pub async fn start_telegram_bot(database: Database) {
-    let mut user_states: HashMap<u64, (time::Instant, UserDialogueState)> = HashMap::new();
-
     let token = std::env::var("TELEGRAM_BOT_TOKEN").expect("TELEGRAM_BOT_TOKEN not set");
-
-    let api = AsyncApi::new(&token);
+    let api = Arc::new(Mutex::new(AsyncApi::new(&token)));
     let mut update_params = GetUpdatesParams::builder()
         .allowed_updates(vec![AllowedUpdate::Message])
         .build();
+
+    let user_states: Arc<Mutex<HashMap<u64, (time::Instant, (i64,UserDialogueState))>>> = Arc::new(Mutex::new(HashMap::new()));
+    tokio::spawn(clean_up_stale_user_states(api.clone(), user_states.clone()));
+
     loop {
+        let api = api.lock().await;
         match api.get_updates(&update_params).await {
             Ok(response) => {
                 for update in response.result {
@@ -125,19 +155,20 @@ pub async fn start_telegram_bot(database: Database) {
                             eprintln!("message.from not set: {message:?}");
                             continue;
                         };
+                        let mut user_states = user_states.lock().await;
                         match user_states.entry(user.id) {
                             Entry::Occupied(mut user_state) => {
-                                match user_state.get_mut().1 {
+                                match user_state.get_mut().1.1 {
                                     UserDialogueState::SentGreetingWaitForLocation => {
                                         if let Some(location) = message.location {
                                             send_message!(&api, message.chat.id, Some(vertical_keyboard_layout(&["Yes", "No"])), "Thank you\\. Do you want to add any additional information to the map, apart from a link to your telegram account? For example, you might want to introduce yourself or to add a e\\-mail address\\.");
-                                            *user_state.get_mut() = (time::Instant::now(), UserDialogueState::GotLocationWaitForAdditionalInformationYesNo((location.latitude, location.longitude)));
+                                            *user_state.get_mut() = (time::Instant::now(), (message.chat.id, UserDialogueState::GotLocationWaitForAdditionalInformationYesNo((location.latitude, location.longitude))));
                                         }
                                     },
                                     UserDialogueState::GotLocationWaitForAdditionalInformationYesNo(coords) => match message.text.as_deref() {
                                         Some("Yes") => {
                                             send_message!(&api, message.chat.id, None, "Alright, then you may now enter this additional information\\. Please don't enter too much, I will truncate your input at 250 characters\\.");
-                                            *user_state.get_mut() = (time::Instant::now(), UserDialogueState::WaitForAdditionalInformation(coords));
+                                            *user_state.get_mut() = (time::Instant::now(), (message.chat.id,UserDialogueState::WaitForAdditionalInformation(coords)));
                                         },
                                         Some("No") => received_pcb_data(&database, &api, message.chat.id, &user, user_state, coords, None).await,
                                         _ => send_message!(&api, message.chat.id, Some(vertical_keyboard_layout(&["Yes", "No"])), "Sorry, I don't understand. Please reply either \"Yes\" or \"No\"\\.")
@@ -160,7 +191,7 @@ pub async fn start_telegram_bot(database: Database) {
                                         send_message!(&api, message.chat.id, None, "Hello {escaped_first_name}\\! Looks like you want to add a Dreame adapter to the map\\. To do so, please send me the location that should be shown on the map\\.\n\n*__IMPORTANT__*: The location you send me will be used as\\-is and displayed on the map\\. If you don't want the world to know where exactly you live, you might want to use a location that is a bit away\\.");
                                         user_state.insert((
                                             time::Instant::now(),
-                                            UserDialogueState::SentGreetingWaitForLocation,
+                                            (message.chat.id,UserDialogueState::SentGreetingWaitForLocation),
                                         ));
                                     }
                                 } else {
